@@ -1,13 +1,15 @@
 package edu.sjsu.moth.server.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import edu.sjsu.moth.generated.Relationship;
 import edu.sjsu.moth.generated.SearchResult;
+import edu.sjsu.moth.server.activitypub.ActivityPubUtil;
+import edu.sjsu.moth.server.activitypub.message.AcceptMessage;
 import edu.sjsu.moth.server.controller.InboxController;
 import edu.sjsu.moth.server.controller.MothController;
 import edu.sjsu.moth.server.db.Account;
 import edu.sjsu.moth.server.db.AccountRepository;
-import edu.sjsu.moth.server.db.Follow;
 import edu.sjsu.moth.server.db.FollowRepository;
 import edu.sjsu.moth.server.db.PubKeyPair;
 import edu.sjsu.moth.server.db.PubKeyPairRepository;
@@ -18,9 +20,9 @@ import lombok.extern.apachecommons.CommonsLog;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.web.bind.annotation.RequestParam;
 import reactor.core.publisher.Mono;
 
+import javax.security.auth.login.AccountNotFoundException;
 import java.security.Principal;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -51,6 +53,15 @@ public class AccountService {
 
     @Autowired
     EmailService emailService;
+
+    @Autowired
+    FollowService followService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private ActivityPubService activityPubService;
 
     static PubKeyPair genPubKeyPair(String acct) {
         var pair = WebFingerUtils.genPubPrivKeyPem();
@@ -85,34 +96,64 @@ public class AccountService {
         return mono;
     }
 
-    public Mono<String> followerHandler(String id, JsonNode inboxNode, String requestType) {
-        String follower = inboxNode.get("actor").asText();
-
-        if (requestType.equals("Follow")) {
-            var follow = new Follow(follower, id);
-
-            return accountRepository.findItemByAcct(id)
-                    .switchIfEmpty(Mono.error(new RuntimeException("Error: Account to follow does not exist")))
-                    .flatMap(account -> {
-                        return accountRepository.findItemByAcct(follower).switchIfEmpty(
-                                        Mono.error(new RuntimeException("Error: Follower account does not exist")))
-                                .flatMap(followerAccount -> {
-                                    return followRepository.save(follow)
-                                            .then(followRepository.countAllByFollowedId(account.id)
-                                                          .flatMap(followersCount -> {
-                                                              account.followers_count = followersCount.intValue();
-                                                              return accountRepository.save(account);
-                                                          }))
-                                            .then(followRepository.countAllByFollowerId(followerAccount.id)
-                                                          .flatMap(followingCount -> {
-                                                              followerAccount.following_count =
-                                                                      followingCount.intValue();
-                                                              return accountRepository.save(followerAccount);
-                                                          })).thenReturn("done");
-                                });
-                    });
+    public Mono<String> getPrivateKey(String id, boolean addIfMissing) {
+        var mono = pubKeyPairRepository.findItemByAcct(id).map(pair -> pair.privateKeyPEM);
+        if (addIfMissing) {
+            mono = mono.switchIfEmpty(Mono.just(WebFingerUtils.genPubPrivKeyPem()).flatMap(
+                            p -> pubKeyPairRepository.save(new PubKeyPair(id, p.pubKey(), p.privKey())))
+                                              .map(p -> p.privateKeyPEM));
         }
-        return Mono.error(new RuntimeException("Error: Unsupported request type"));
+        return mono;
+    }
+
+    public Mono<String> followerHandler(String targetAcct, JsonNode inboxNode, boolean isUndo) {
+        String actorUrl = inboxNode.path("actor").asText();
+        String followerAcct = ActivityPubUtil.inboxUrlToAcct(actorUrl);
+        boolean isRemote = ActivityPubUtil.isRemoteUser(actorUrl);
+
+        // 1) look up the target account
+        return accountRepository.findItemByAcct(targetAcct)
+                .switchIfEmpty(Mono.error(new AccountNotFoundException("Account not found: " + targetAcct)))
+                .flatMap(targetAccount -> {
+                    if (isRemote) {
+                        // For a remote Actor we only update counts (and accept on real Follow)
+                        Mono<String> followOp =
+                                isUndo ? followService.removeIncomingRemoteFollow(followerAcct, targetAccount) :
+                                        followService.saveIncomingRemoteFollow(followerAcct, targetAccount);
+                        return isUndo ? followOp :
+                                followOp.flatMap(__ -> sendAcceptMessage(inboxNode, targetAccount.acct));
+                    } else {
+                        return accountRepository.findItemByAcct(followerAcct).switchIfEmpty(
+                                        Mono.error(new AccountNotFoundException("Follower not found: " + followerAcct)))
+                                .flatMap(followerAccount -> isUndo ?
+                                        followService.removeIncomingRemoteFollow(followerAcct, targetAccount) :
+                                        followService.saveFollow(followerAccount, targetAccount));
+                    }
+                }).doOnError(e -> log.error(
+                        "Failed to %s follow for %s: %s".formatted(isUndo ? "undo" : "process", targetAcct,
+                                                                   e.getMessage()))).thenReturn("done");
+    }
+
+    public Mono<String> acceptHandler(String id, JsonNode inboxNode) {
+        //The Undo code has to be completed, when we receive an unfollow request
+        String actorUrl = inboxNode.path("actor").asText();
+        String followerAcct = ActivityPubUtil.inboxUrlToAcct(actorUrl);
+        return Mono.zip(accountRepository.findById(id), accountRepository.findItemByAcct(followerAcct))
+                .switchIfEmpty(Mono.error(new AccountNotFoundException("Account not found: " + id))).flatMap(tuple -> {
+                    Account followerAccount = tuple.getT1();
+                    Account followedAccount = tuple.getT2();
+                    Mono<String> saveAndRecount =
+                            followService.saveOutgoingRemoteFollow(followerAccount, followedAccount.id);
+                    return saveAndRecount.thenReturn("Accept received");
+                });
+    }
+
+    public Mono<Void> sendAcceptMessage(JsonNode body, String id) {
+        //My profile URL
+        String actorUrl = ActivityPubUtil.getActorUrl(id);
+        AcceptMessage acceptMessage = new AcceptMessage(actorUrl, body);
+        JsonNode message = objectMapper.valueToTree(acceptMessage);
+        return activityPubService.sendSignedActivity(message, id, body.get("actor").asText() + "/inbox");
     }
 
     public Mono<ArrayList<Account>> userFollowInfo(String id, String max_id, String since_id, String min_id,
@@ -165,13 +206,6 @@ public class AccountService {
         }
     }
 
-    public Mono<Follow> saveFollow(String followerId, String followedId) {
-        return followRepository.findIfFollows(followerId, followedId).switchIfEmpty(Mono.defer(() -> {
-            Follow follow = new Follow(followerId, followedId);
-            return followRepository.save(follow);
-        }));
-    }
-
     public List<String> paginateFollowers(List<String> followers, int pageNo, int pageSize) {
         int startIndex = (pageNo - 1) * pageSize;
         int endIndex = Math.min(startIndex + pageSize, followers.size());
@@ -200,15 +234,6 @@ public class AccountService {
                                     if (offset != null) result.accounts.subList(offset, result.accounts.size());
                                     return result;
                                 })));
-    }
-
-    public Mono<Relationship> followUser(String followerId, String followedId) {
-        var followResult = saveFollow(followerId, followedId);
-        return followResult.flatMap(followStatus -> followRepository.findIfFollows(followedId, followerId)
-                .map(follow -> new Relationship(followerId, true, false, false, true, false, false, false, false, false,
-                                                false, false, false, "")).switchIfEmpty(Mono.just(
-                        new Relationship(followerId, true, false, false, false, false, false, false, false, false,
-                                         false, false, false, ""))));
     }
 
     public Mono<Relationship> checkRelationship(String followerId, String followedId) {

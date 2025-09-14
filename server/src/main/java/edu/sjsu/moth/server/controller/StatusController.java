@@ -28,6 +28,7 @@ import java.security.Principal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Logger;
 
 @RestController
 public class StatusController {
@@ -39,6 +40,8 @@ public class StatusController {
 
     @Autowired
     MediaService mediaService;
+
+    Logger LOG = Logger.getLogger(StatusController.class.getName());
 
     // Status Editing:
     // Edit a status
@@ -101,8 +104,8 @@ public class StatusController {
                     var status = new Status(null, EmailCodeUtils.now(), body.in_reply_to_id, null, body.sensitive,
                                             body.spoiler_text == null ? "" : body.spoiler_text, body.visibility,
                                             body.language, null, null, 0, 0, 0, false, false, false, false, body.status,
-                                            null, null, acct, mediaAttachments, List.of(), List.of(), List.of(), null,
-                                            null, body.status, EmailCodeUtils.now());
+                                            null, null, acct, mediaAttachments, new ArrayList<>(), List.of(), List.of(),
+                                            null, null, body.status, EmailCodeUtils.now());
                     return statusService.save(status).map(ResponseEntity::ok);
                 });
     }
@@ -148,7 +151,8 @@ public class StatusController {
                                        sensitive != null && sensitive.equals("true"),
                                        spoiler_text == null ? "" : spoiler_text, visibility, language, null, null, 0, 0,
                                        0, false, false, false, false, status, null, null, acct, mediaAttachments,
-                                       List.of(), List.of(), List.of(), null, null, status, EmailCodeUtils.now());
+                                       new ArrayList<>(), List.of(), List.of(), null, null, status,
+                                       EmailCodeUtils.now());
                     return statusService.save(s).map(ResponseEntity::ok);
                 });
     }
@@ -168,12 +172,12 @@ public class StatusController {
                                                              @RequestParam(required = false) String min_id,
                                                              @RequestParam(required = false, defaultValue = "20")
                                                              int limit) {
-        return statusService.getTimeline(user, max_id, since_id, min_id, limit, true).map(ResponseEntity::ok);
+        return statusService.getHomeTimeline(user, max_id, since_id, min_id, limit, true).map(ResponseEntity::ok);
     }
 
     // spec: https://docs.joinmastodon.org/methods/accounts/#statuses
     @GetMapping("/api/v1/accounts/{id}/statuses")
-    Mono<ResponseEntity<List<Status>>> getApiV1AccountsStatuses(@PathVariable String id,
+    Mono<ResponseEntity<List<Status>>> getApiV1AccountsStatuses(Principal user, @PathVariable String id,
             /* String. Return results older than this ID */ String max_id,
             /* String. Return results newer than this ID */ String since_id,
             /* String. Return results immediately newer than this ID */ String min_id,
@@ -185,7 +189,7 @@ public class StatusController {
             statuses do not receive special priority in the order of the returned results. */ Boolean pinned,
             /* String. Filter for statuses using a specific hashtag */ String tagged) {
         return accountService.getAccountById(id).flatMap(
-                        acct -> statusService.getStatusesForId(acct.username, max_id, since_id, min_id, only_media,
+                        acct -> statusService.getStatusesForId(user, acct.username, max_id, since_id, min_id, only_media,
                                                                exclude_replies, exclude_reblogs, pinned, tagged, limit))
                 .map(ResponseEntity::ok);
     }
