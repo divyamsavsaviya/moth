@@ -104,13 +104,8 @@ public class TimelineControllerTest {
         prepareStatus();
         accountRepository.save(new Account("test-fetch")).block();
         // Mock the authentication
-        webTestClient
-                .mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-fetch")))
-                .get()
-                .uri(TIMELINE_END_POINTS)
-                .exchange().expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.length()").isEqualTo(1)
+        webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-fetch"))).get().uri(TIMELINE_END_POINTS)
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.length()").isEqualTo(1)
                 .jsonPath("$[0].visibility").isEqualTo("public");
     }
 }

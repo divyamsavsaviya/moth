@@ -271,7 +271,6 @@ public class StatusControllerTest {
         List<CreateMessage> outboxList =
                 outboxRepository.findAllByActorOrderByPublishedAtDesc(actor).collectList().block();
 
-
         // 5) verify that we stored exactly one Create per post
         assertNotNull(outboxList, "Outbox list should not be null");
         assertEquals(visibilities.length, outboxList.size(), "Expected one outbox entry per status posted");

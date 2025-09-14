@@ -189,7 +189,8 @@ public class StatusController {
             statuses do not receive special priority in the order of the returned results. */ Boolean pinned,
             /* String. Filter for statuses using a specific hashtag */ String tagged) {
         return accountService.getAccountById(id).flatMap(
-                        acct -> statusService.getStatusesForId(user, acct.username, max_id, since_id, min_id, only_media,
+                        acct -> statusService.getStatusesForId(user, acct.username, max_id, since_id, min_id,
+                                                               only_media,
                                                                exclude_replies, exclude_reblogs, pinned, tagged, limit))
                 .map(ResponseEntity::ok);
     }

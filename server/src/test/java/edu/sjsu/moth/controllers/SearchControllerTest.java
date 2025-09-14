@@ -80,12 +80,8 @@ public class SearchControllerTest {
     @Test
     public void testSearchQueryTooShortReturnsEmpty() {
         webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-user"))).get()
-                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT)
-                        .queryParam("q", "ab").build())
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.accounts.length()").isEqualTo(0)
+                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT).queryParam("q", "ab").build()).exchange()
+                .expectStatus().isOk().expectBody().jsonPath("$.accounts.length()").isEqualTo(0)
                 .jsonPath("$.statuses.length()").isEqualTo(0);
     }
 
@@ -94,42 +90,29 @@ public class SearchControllerTest {
         accountRepository.save(new Account("test-local")).block();
 
         webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-local"))).get()
-                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT)
-                        .queryParam("q", "test-local")
-                        .queryParam("type", "accounts")
-                        .build())
+                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT).queryParam("q", "test-local")
+                        .queryParam("type", "accounts").build())
 
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.accounts[0].acct").isEqualTo("test-local");
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.accounts[0].acct").isEqualTo("test-local");
     }
 
     @Test
     public void testRemoteSearchWithInvalidDomainReturnsEmpty() {
         webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-user"))).get()
-                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT)
-                        .queryParam("q", "@user@invalid_domain")
-                        .build())
+                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT).queryParam("q", "@user@invalid_domain").build())
 
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .consumeWith(response -> Assertions.assertTrue(response.getResponseBody() == null || response.getResponseBody().length == 0));
+                .exchange().expectStatus().isOk().expectBody().consumeWith(response -> Assertions.assertTrue(
+                        response.getResponseBody() == null || response.getResponseBody().length == 0));
     }
 
     // Optional: For remote test with real Mastodon instance (only for manual testing)
     @Test
     public void testRemoteSearchValidDomain() {
         webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-user"))).get()
-                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT)
-                        .queryParam("q", "@Gargron@mastodon.social")
-                        .build())
+                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT).queryParam("q", "@Gargron@mastodon.social").build())
 
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.accounts").exists(); // Will vary depending on actual Mastodon availability
+                .exchange().expectStatus().isOk().expectBody().jsonPath("$.accounts")
+                .exists(); // Will vary depending on actual Mastodon availability
     }
 
     @Test
@@ -141,14 +124,9 @@ public class SearchControllerTest {
 
         // Step 2: Make a remote search request (simulate via real domain, or mock if isolated)
         webTestClient.mutateWith(mockJwt().jwt(jwt -> jwt.claim("sub", "test-user"))).get()
-                .uri(uriBuilder -> uriBuilder
-                        .path(SEARCH_ENDPOINT)
+                .uri(uriBuilder -> uriBuilder.path(SEARCH_ENDPOINT)
                         .queryParam("q", "@Gargron@mastodon.social") // Example remote user
-                        .queryParam("type", "accounts")
-                        .build())
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
+                        .queryParam("type", "accounts").build()).exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.accounts").exists();
 
         // Step 3: Assert only remote users are saved
